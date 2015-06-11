@@ -68,7 +68,7 @@ public class TransactionDataPublishingHandler extends AbstractHandler implements
 
         if(transactionInfoPayload != null){
             Object[] transactionStreamPayload = buildTransactionStreamPayload(transactionInfoPayload, messageContext);
-            log.debug(String.format("transaction stream payload => %s", transactionStreamPayload));
+            log.debug(String.format("transaction stream payload => %s", Arrays.toString(transactionStreamPayload)));
             transactionDataPublisher.publish((transactionStreamPayload));
         }
     }
