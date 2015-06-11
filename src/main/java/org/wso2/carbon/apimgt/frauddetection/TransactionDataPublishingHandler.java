@@ -26,6 +26,7 @@ import org.apache.synapse.core.axis2.Axis2MessageContext;
 import org.apache.synapse.rest.AbstractHandler;
 import org.apache.synapse.transport.passthru.util.RelayUtils;
 
+import javax.xml.namespace.QName;
 import javax.xml.stream.XMLStreamException;
 import java.io.IOException;
 import java.util.*;
@@ -64,7 +65,7 @@ public class TransactionDataPublishingHandler extends AbstractHandler implements
 
     private void publishTransactionData(MessageContext messageContext){
 
-        String transactionInfoPayload = getTransactionInfoPayload(messageContext);
+        OMElement transactionInfoPayload = getTransactionInfoPayload(messageContext);
 
         if(transactionInfoPayload != null){
             Object[] transactionStreamPayload = buildTransactionStreamPayload(transactionInfoPayload, messageContext);
@@ -74,7 +75,7 @@ public class TransactionDataPublishingHandler extends AbstractHandler implements
     }
 
 
-    private String getTransactionInfoPayload(MessageContext messageContext) {
+    private OMElement getTransactionInfoPayload(MessageContext messageContext) {
 
         org.apache.axis2.context.MessageContext axis2MessageContext = ((Axis2MessageContext) messageContext).
                 getAxis2MessageContext();
@@ -91,46 +92,45 @@ public class TransactionDataPublishingHandler extends AbstractHandler implements
 
         Iterator iterator = messageContext.getEnvelope().getBody().getChildElements();
 
-        String payload = null;
+        OMElement payload = null;
         if(iterator.hasNext()){
-            OMElement bodyElement = (OMElement) iterator.next();
-            payload = bodyElement.getText();
+            payload = (OMElement) iterator.next();
         }
 
         return payload;
     }
 
-    private Object[] buildTransactionStreamPayload(String paymentInfoPayload, MessageContext messageContext) {
+    private Object[] buildTransactionStreamPayload(OMElement paymentInfoPayload, MessageContext messageContext) {
 
-        // Parse the payment info JSON payload.
-        Gson gson = new Gson();
-        Map<String, Object> paymentPayload = gson.fromJson(paymentInfoPayload, HashMap.class);
 
         // Extract credit card info
-        Map<String, Object> creditCardInfo = (Map<String, Object>) ((Map<String, Object>)((List)((Map<String, Object>) paymentPayload.get("payer")).get("funding_instruments")).get(0)).get("credit_card");
+        OMElement creditCardInfo = paymentInfoPayload.getFirstChildWithName(new QName(null, "payer")).
+                                    getFirstChildWithName(new QName(null, "funding_instruments")).
+                                    getFirstChildWithName(new QName("credit_card"));
 
         // Extract shipping info
-        Map<String, String> shippingInfo = (Map<String, String>) ((Map<String, Object>) paymentPayload.get("shipment")).get("shipping_address");
+        OMElement shippingInfo = paymentInfoPayload.getFirstChildWithName(new QName(null, "shipment")).getFirstChildWithName(new QName("shipping_address"));
 
         // Extract transaction info
-        Map<String, Object> transactionAmountInfo = (Map<String, Object>) ((Map<String, Object>)((List)paymentPayload.get("transactions")).get(0)).get("amount");
+        OMElement transactionAmountInfo = paymentInfoPayload.getFirstChildWithName(new QName(null, "transactions")).getFirstChildWithName(new QName("amount"));
 
         // Extract order info
-        Map<String, Object> orderInfo = (Map<String, Object>) ((Map<String, Object>)((List)paymentPayload.get("transactions")).get(0)).get("order");
+        OMElement orderInfo = paymentInfoPayload.getFirstChildWithName(new QName(null, "transactions")).getFirstChildWithName(new QName("order"));
 
-        String transactionId = (String) paymentPayload.get("id");
-        long creditCardNumber = Long.parseLong((String) creditCardInfo.get("number"));
-        double transactionAmount = Double.parseDouble((String) transactionAmountInfo.get("total"));
-        String currency = (String) transactionAmountInfo.get("currency");
-        String email = (String) ((Map<String, Object>) paymentPayload.get("payer")).get("email");
+        String transactionId = paymentInfoPayload.getFirstChildWithName(new QName(null, "id")).getText();
+        long creditCardNumber = Long.parseLong(creditCardInfo.getFirstChildWithName(new QName(null, "number")).getText());
+        double transactionAmount = Double.parseDouble(transactionAmountInfo.getFirstChildWithName(new QName(null, "total")).getText());
+        String currency = transactionAmountInfo.getFirstChildWithName(new QName(null, "currency")).getText();
+        String email = paymentInfoPayload.getFirstChildWithName(new QName(null, "payer")).getFirstChildWithName(new QName(null,"email")).getText();
         String shippingAddress = getShippingAddress(shippingInfo);
         String billingAddress = getBillingAddress(creditCardInfo);
         String ip = getClientIPAddress(messageContext);
-        String itemNo = (String) orderInfo.get("item_number");
-        int quantity = ((Double) orderInfo.get("quantity")).intValue();
+        String itemNo = orderInfo.getFirstChildWithName(new QName(null,"item_number")).getText();
+        int quantity = Integer.parseInt(orderInfo.getFirstChildWithName(new QName(null, "quantity")).getText());
         long timestamp = System.currentTimeMillis();
 
         return new Object[]{transactionId, creditCardNumber, transactionAmount, currency, email, shippingAddress, billingAddress, ip, itemNo, quantity, timestamp};
+
     }
 
     private String getClientIPAddress(MessageContext messageContext) {
@@ -182,13 +182,23 @@ public class TransactionDataPublishingHandler extends AbstractHandler implements
 
     }
 
-    private String getBillingAddress(Map<String, Object> creditCardInfo) {
-        Map<String, String> billingAddressInfo = (Map<String, String>) creditCardInfo.get("billing_address");
-        return String.format("%s, %s, %s, %s, %s", billingAddressInfo.get("line1"), billingAddressInfo.get("city"), billingAddressInfo.get("state"), billingAddressInfo.get("postal_code"), billingAddressInfo.get("country_code"));
+    private String getBillingAddress(OMElement creditCardInfo) {
+        OMElement billingAddressInfo = creditCardInfo.getFirstChildWithName(new QName(null, "billing_address"));
+        return String.format("%s, %s, %s, %s, %s",
+                                billingAddressInfo.getFirstChildWithName(new QName(null, "line1")).getText(),
+                                billingAddressInfo.getFirstChildWithName(new QName(null, "city")).getText(),
+                                billingAddressInfo.getFirstChildWithName(new QName(null, "state")).getText(),
+                                billingAddressInfo.getFirstChildWithName(new QName(null, "postal_code")).getText(),
+                                billingAddressInfo.getFirstChildWithName(new QName(null, "country_code")).getText());
     }
 
-    private String getShippingAddress(Map<String, String> shippingInfo) {
-        return String.format("%s, %s, %s, %s, %s", shippingInfo.get("line1"), shippingInfo.get("city"), shippingInfo.get("state"), shippingInfo.get("postal_code"), shippingInfo.get("country_code"));
+    private String getShippingAddress(OMElement shippingInfo) {
+        return String.format("%s, %s, %s, %s, %s",
+                shippingInfo.getFirstChildWithName(new QName(null, "line1")).getText(),
+                shippingInfo.getFirstChildWithName(new QName(null, "city")).getText(),
+                shippingInfo.getFirstChildWithName(new QName(null, "state")).getText(),
+                shippingInfo.getFirstChildWithName(new QName(null, "postal_code")).getText(),
+                shippingInfo.getFirstChildWithName(new QName(null, "country_code")).getText());
     }
 
 
