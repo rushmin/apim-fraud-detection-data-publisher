@@ -15,7 +15,6 @@
  */
 package org.wso2.carbon.apimgt.frauddetection;
 
-import com.google.gson.Gson;
 import org.apache.axiom.om.OMElement;
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
@@ -28,6 +27,8 @@ import org.apache.synapse.transport.passthru.util.RelayUtils;
 
 import javax.xml.namespace.QName;
 import javax.xml.stream.XMLStreamException;
+import java.io.File;
+import java.io.FileInputStream;
 import java.io.IOException;
 import java.util.*;
 
@@ -37,14 +38,18 @@ import java.util.*;
 public class TransactionDataPublishingHandler extends AbstractHandler implements ManagedLifecycle {
 
     private static final Log log = LogFactory.getLog(TransactionDataPublishingHandler.class);
-    private static final String HTTP_HEADER_X_FORWARDED_FOR = "X-Forwarded-For";
-    private static final String HTTP_HEADER_MOCK_CLIENT_IP = "Fraud-Detection-Mock-Client-IP";
 
     private volatile TransactionDataPublisher transactionDataPublisher;
 
     public void init(SynapseEnvironment synapseEnvironment) {
-        transactionDataPublisher = new TransactionDataPublisher();
-        transactionDataPublisher.init();
+
+        transactionDataPublisher = TransactionDataPublisher.getInstance();
+
+        if(!transactionDataPublisher.isInitialized()){
+            DataPublisherConfig config = getDataPublisherConfig();
+            transactionDataPublisher.init(config);
+        }
+
     }
 
     public void destroy() {
@@ -74,6 +79,37 @@ public class TransactionDataPublishingHandler extends AbstractHandler implements
         }
     }
 
+    private DataPublisherConfig getDataPublisherConfig() {
+
+
+        DataPublisherConfig config = new DataPublisherConfig();
+
+        File dasPropertiesFile = new File("repository/conf/etc/fraud-detection/fraud-detection.properties");
+
+        try {
+            Properties properties = new Properties();
+            properties.load(new FileInputStream(dasPropertiesFile));
+
+            config.setDasHost(properties.getProperty("dasHost"));
+            config.setDasPort(properties.getProperty("dasPort"));
+            config.setDasUsername(properties.getProperty("dasUsername"));
+            config.setDasPassword(properties.getProperty("dasPassword"));
+
+            config.setStreamName(properties.getProperty("streamName"));
+            config.setStreamVersion(properties.getProperty("streamVersion"));
+
+            log.debug(String.format("Fraud detection DAS properties were read from the file : '%s'", dasPropertiesFile.getAbsolutePath()));
+
+            return config;
+
+        } catch (IOException e) {
+            log.warn(String.format("Cannot read Fraud detection DAS properties from the file : '%s'.",
+                    dasPropertiesFile.getAbsolutePath()));
+            return null;
+        }
+
+
+    }
 
     private OMElement getTransactionInfoPayload(MessageContext messageContext) {
 
@@ -100,28 +136,28 @@ public class TransactionDataPublishingHandler extends AbstractHandler implements
         return payload;
     }
 
-    private Object[] buildTransactionStreamPayload(OMElement paymentInfoPayload, MessageContext messageContext) {
+    private Object[] buildTransactionStreamPayload(OMElement transactionInfoPayload, MessageContext messageContext) {
 
 
         // Extract credit card info
-        OMElement creditCardInfo = paymentInfoPayload.getFirstChildWithName(new QName(null, "payer")).
+        OMElement creditCardInfo = transactionInfoPayload.getFirstChildWithName(new QName(null, "payer")).
                                     getFirstChildWithName(new QName(null, "funding_instruments")).
                                     getFirstChildWithName(new QName("credit_card"));
 
         // Extract shipping info
-        OMElement shippingInfo = paymentInfoPayload.getFirstChildWithName(new QName(null, "shipment")).getFirstChildWithName(new QName("shipping_address"));
+        OMElement shippingInfo = transactionInfoPayload.getFirstChildWithName(new QName(null, "shipment")).getFirstChildWithName(new QName("shipping_address"));
 
         // Extract transaction info
-        OMElement transactionAmountInfo = paymentInfoPayload.getFirstChildWithName(new QName(null, "transactions")).getFirstChildWithName(new QName("amount"));
+        OMElement transactionAmountInfo = transactionInfoPayload.getFirstChildWithName(new QName(null, "transactions")).getFirstChildWithName(new QName("amount"));
 
         // Extract order info
-        OMElement orderInfo = paymentInfoPayload.getFirstChildWithName(new QName(null, "transactions")).getFirstChildWithName(new QName("order"));
+        OMElement orderInfo = transactionInfoPayload.getFirstChildWithName(new QName(null, "transactions")).getFirstChildWithName(new QName("order"));
 
-        String transactionId = paymentInfoPayload.getFirstChildWithName(new QName(null, "id")).getText();
+        String transactionId = transactionInfoPayload.getFirstChildWithName(new QName(null, "id")).getText();
         long creditCardNumber = Long.parseLong(creditCardInfo.getFirstChildWithName(new QName(null, "number")).getText());
         double transactionAmount = Double.parseDouble(transactionAmountInfo.getFirstChildWithName(new QName(null, "total")).getText());
         String currency = transactionAmountInfo.getFirstChildWithName(new QName(null, "currency")).getText();
-        String email = paymentInfoPayload.getFirstChildWithName(new QName(null, "payer")).getFirstChildWithName(new QName(null,"email")).getText();
+        String email = transactionInfoPayload.getFirstChildWithName(new QName(null, "payer")).getFirstChildWithName(new QName(null,"email")).getText();
         String shippingAddress = getShippingAddress(shippingInfo);
         String billingAddress = getBillingAddress(creditCardInfo);
         String ip = getClientIPAddress(messageContext);
@@ -134,52 +170,7 @@ public class TransactionDataPublishingHandler extends AbstractHandler implements
     }
 
     private String getClientIPAddress(MessageContext messageContext) {
-
-        // Client IP should be retrieved based on the scenario. Following order should be followed.
-        // 1) If the client IP is mocked, then there will be an HTTP header named 'FRAUD-DETECTION-MOCK-CLIENT-IP'
-        // 2) API GW is fronted by a load balancer. Client IP should be retrieved from the 'X-Forwarded-For' header.
-        // 3) Versioned API is called directly (No load balancer). Client IP should be retrieved from the 'REMOTE_ADDR' header
-
-        String clientIPAddress = null;
-
-        org.apache.axis2.context.MessageContext axis2MessageContext = ((Axis2MessageContext) messageContext).getAxis2MessageContext();
-        Map<String, String> transportHeaders  = (Map) axis2MessageContext.getProperty(org.apache.axis2.context.MessageContext.TRANSPORT_HEADERS);
-
-        // Check whether the mock IP has been set.
-        String mockClientIP = (String) transportHeaders.get(HTTP_HEADER_MOCK_CLIENT_IP);
-        if (mockClientIP != null && !mockClientIP.isEmpty()) {
-
-            clientIPAddress = mockClientIP;
-
-            if(log.isDebugEnabled()){
-                log.debug(String.format("Retrieved the client IP '%s' from the HTTP header '%s'", clientIPAddress, HTTP_HEADER_MOCK_CLIENT_IP));
-            }
-            return clientIPAddress;
-        }
-
-        // Check whether the request comes from the load balancer. If yes get the client IP from the 'X-Forwarded-For' header.
-        String xForwardedForHeaderValue = (String) transportHeaders.get(HTTP_HEADER_X_FORWARDED_FOR);
-        if (xForwardedForHeaderValue != null && !xForwardedForHeaderValue.isEmpty()) {
-
-            clientIPAddress = xForwardedForHeaderValue.split(",")[0];
-
-            if(log.isDebugEnabled()){
-                log.debug(String.format("Retrieved the client IP '%s' from the HTTP header '%s'", clientIPAddress, HTTP_HEADER_X_FORWARDED_FOR));
-            }
-
-            return clientIPAddress;
-        }
-
-        // No special handling. Just get the address of the request sender.
-
-        clientIPAddress = (String) axis2MessageContext.getProperty(org.apache.axis2.context.MessageContext.REMOTE_ADDR);
-
-        if(log.isDebugEnabled()){
-            log.debug(String.format("Retrieved the client IP '%s' from the HTTP header '%s'", clientIPAddress, org.apache.axis2.context.MessageContext.REMOTE_ADDR));
-        }
-
-        return clientIPAddress;
-
+        return Util.getClientIPAddress(messageContext);
     }
 
     private String getBillingAddress(OMElement creditCardInfo) {

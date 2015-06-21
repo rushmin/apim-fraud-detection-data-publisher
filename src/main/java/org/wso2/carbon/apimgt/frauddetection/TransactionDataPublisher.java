@@ -31,12 +31,39 @@ public class TransactionDataPublisher {
 
     private String streamId;
     private boolean ready;
+    private boolean initialized;
     private DataPublisher dataPublisher;
 
-    public void init() {
+    private static TransactionDataPublisher instance = null;
+
+
+    protected TransactionDataPublisher() {
+    }
+
+    public static TransactionDataPublisher getInstance() {
+        if (instance == null) {
+            synchronized (TransactionDataPublisher.class) {
+                if (instance == null) {
+                    instance = new TransactionDataPublisher();
+                }
+            }
+        }
+        return instance;
+    }
+
+
+    protected void init(DataPublisherConfig config) {
+
+        setInitialized(true);
 
         try {
-            readAndSetPublisherProperties();
+
+            if(config == null){
+                log.error(String.format("DataPublisherConfig is null. Cannot initialize TransactionDataPublisher"));
+                return;
+            }
+
+            setDataPublisherConfig(config);
             dataPublisher = new DataPublisher(String.format("tcp://%s:%s", dasHost, dasPort), dasUsername, dasPassword);
             streamId = dataPublisher.findStreamId(streamName, streamVersion);
 
@@ -55,10 +82,6 @@ public class TransactionDataPublisher {
             logInitializationError(e);
         }
 
-    }
-
-    public boolean isReady() {
-        return ready;
     }
 
     public void shutdown() {
@@ -83,48 +106,37 @@ public class TransactionDataPublisher {
 
     }
 
-    private void readAndSetPublisherProperties(){
+    private boolean isReady() {
+        return ready;
+    }
 
-        File dasPropertiesFile = new File("repository/conf/etc/fraud-detection/fraud-detection.properties");
+	 public boolean isInitialized() {
+        return initialized;
+    }
 
-        try {
-            Properties properties = new Properties();
-            properties.load(new FileInputStream(dasPropertiesFile));
+    public void setInitialized(boolean initialized) {
+        this.initialized = initialized;
+    }
 
-            dasHost = properties.getProperty("dasHost");
-            dasPort = properties.getProperty("dasPort");
-            dasUsername = properties.getProperty("dasUsername");
-            dasPassword = properties.getProperty("dasPassword");
+    private void setDataPublisherConfig(DataPublisherConfig config){
 
-            streamName = properties.getProperty("streamName");
-            streamVersion = properties.getProperty("streamVersion");
+        dasHost = config.getDasHost();
+        dasPort = config.getDasPort();
+        dasUsername = config.getDasUsername();
+        dasPassword = config.getDasPassword();;
 
-            log.debug(String.format("Fraud detection DAS properties were read from the file : '%s'", dasPropertiesFile.getAbsolutePath()));
-
-        } catch (IOException e) {
-            log.warn(String.format("Cannot read Fraud detection DAS properties from the file : '%s'. Default settings will be used",
-                                                                                dasPropertiesFile.getAbsolutePath()));
-            setDefaultPublisherProperties();
-        }
+        streamName = config.getStreamName();
+        streamVersion = config.getStreamVersion();
 
         log.debug(String.format("Fraud detection DAS properties => host : '%s', port : '%s', username : '%s', password : '%s', streamName : '%s', streamVersion : '%s'",
                                 dasHost, dasPort, dasUsername, dasPassword.replaceAll(".", "x"), streamName, streamVersion));
 
     }
 
-    private void setDefaultPublisherProperties(){
-
-        dasHost = "localhost";
-        dasPort = "7611";
-        dasUsername = "admin";
-        dasPassword = "admin";
-
-        streamName = "transactionStream";
-        streamVersion = "1.0.0";
-    }
 
     private void logInitializationError(Exception e) {
         log.error("Cannot initialize TransactionDataPublisher.", e);
     }
 
+   
 }
