@@ -45,7 +45,7 @@ public class TransactionDataPublishingHandler extends AbstractHandler implements
 
         transactionDataPublisher = TransactionDataPublisher.getInstance();
 
-        if(!transactionDataPublisher.isInitialized()){
+        if(!transactionDataPublisher.isReady()){
             DataPublisherConfig config = getDataPublisherConfig();
             transactionDataPublisher.init(config);
         }

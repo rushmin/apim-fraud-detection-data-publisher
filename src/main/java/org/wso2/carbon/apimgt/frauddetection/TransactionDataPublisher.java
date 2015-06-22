@@ -54,8 +54,6 @@ public class TransactionDataPublisher {
 
     protected void init(DataPublisherConfig config) {
 
-        setInitialized(true);
-
         try {
 
             if(config == null){
@@ -98,6 +96,7 @@ public class TransactionDataPublisher {
                 dataPublisher.publish(transactionEvent);
                 log.debug(String.format("Published event : %s", transactionEvent.toString()));
             } catch (AgentException e) {
+               this.ready = false;
                log.error("Cannot publish transaction stream payload to DAS", e);
             }
         }else{
@@ -106,16 +105,8 @@ public class TransactionDataPublisher {
 
     }
 
-    private boolean isReady() {
+    public boolean isReady() {
         return ready;
-    }
-
-	 public boolean isInitialized() {
-        return initialized;
-    }
-
-    public void setInitialized(boolean initialized) {
-        this.initialized = initialized;
     }
 
     private void setDataPublisherConfig(DataPublisherConfig config){

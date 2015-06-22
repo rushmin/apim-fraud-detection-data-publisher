@@ -177,10 +177,10 @@ public class TransactionDataPublishingMediator extends AbstractMediator{
 
         TransactionDataPublisher publisher = TransactionDataPublisher.getInstance();
 
-        if(!publisher.isInitialized()){
+        if(!publisher.isReady()){
 
             synchronized (publisher){
-                if(!publisher.isInitialized()){
+                if(!publisher.isReady()){
                     DataPublisherConfig config = getDataPublisherConfig();
                     publisher.init(config);
                 }
